@@ -59,6 +59,33 @@ def normalize_text_keep_lines(text):
     return "\n".join(normalize_text(l) for l in text.split("\n"))
 
 
+VSFC_REPO = "uitnlp/vietnamese_students_feedback"
+
+
+def pick_parquet(files, key):
+    """Chọn các file parquet của split `key` (train / validation / test) trong danh sách đường dẫn của repo."""
+    return sorted(f for f in files if f.endswith(".parquet") and key in f.lower())
+
+
+def load_vsfc_hf():
+    """Đọc thẳng file parquet đã được Hugging Face tự chuyển đổi (nhánh refs/convert/parquet).
+    Cách này không cần dataset script nên chạy được với `datasets` bản mới."""
+    import pandas as pd
+    from huggingface_hub import hf_hub_download, list_repo_files
+    rev = "refs/convert/parquet"
+    files = list_repo_files(VSFC_REPO, repo_type="dataset", revision=rev)
+    out = {}
+    for split, key in (("train", "train"), ("dev", "validation"), ("test", "test")):
+        parts = pick_parquet(files, key)
+        if not parts:
+            raise FileNotFoundError(f"Không thấy file parquet cho split '{key}' trong {VSFC_REPO}@{rev}")
+        df = pd.concat([pd.read_parquet(hf_hub_download(VSFC_REPO, f, repo_type="dataset", revision=rev))
+                        for f in parts], ignore_index=True)
+        out[split] = [{"sentence": r.sentence, "sentiment": int(r.sentiment), "topic": int(r.topic)}
+                      for r in df.itertuples()]
+    return out
+
+
 def load_vsfc(vsfc_dir):
     """Trả về {'train':[{sentence,sentiment,topic}], 'dev':..., 'test':...}.
     Hỗ trợ: (1) thư mục gốc UIT-VSFC (train|dev|test/{sentences,sentiments,topics}.txt),
@@ -81,13 +108,21 @@ def load_vsfc(vsfc_dir):
             else:
                 raise FileNotFoundError(f"Không thấy dữ liệu VSFC cho split '{split}' trong {d}")
         return out
-    from datasets import load_dataset
-    ds = load_dataset("uitnlp/vietnamese_students_feedback")
-    mapping = {"train": "train", "dev": "validation", "test": "test"}
-    for split, hf in mapping.items():
-        out[split] = [{"sentence": r["sentence"], "sentiment": int(r["sentiment"]), "topic": int(r["topic"])}
-                      for r in ds[hf]]
-    return out
+    try:
+        return load_vsfc_hf()
+    except Exception as e:                      # noqa: BLE001
+        print(f"[VSFC] tải bản parquet lỗi: {e!r}. Thử load_dataset (chỉ chạy với datasets < 4)...")
+    try:
+        from datasets import load_dataset
+        ds = load_dataset(VSFC_REPO)
+        mapping = {"train": "train", "dev": "validation", "test": "test"}
+        return {split: [{"sentence": r["sentence"], "sentiment": int(r["sentiment"]), "topic": int(r["topic"])}
+                        for r in ds[hf]] for split, hf in mapping.items()}
+    except Exception as e:                      # noqa: BLE001
+        raise RuntimeError(
+            "Không tải được UIT-VSFC tự động. Hãy tải thủ công (UIT NLP Group) rồi chạy lại với "
+            "--vsfc_dir <thư_mục> (cấu trúc train|dev|test/{sentences,sentiments,topics}.txt "
+            "hoặc train.csv/dev.csv/test.csv với cột sentence,sentiment,topic). Lỗi gốc: " + repr(e))
 
 
 def zipf_stats(counter, path_png, title):
@@ -131,8 +166,9 @@ def main():
             vsfc = smoke_data.make_vsfc()
             n_jobs = 1
         else:
+            vsfc = load_vsfc(args.vsfc_dir)          # nhỏ + dễ lỗi nhất -> tải trước để lỗi thì dừng sớm
+            print("[VSFC] train/dev/test =", {k: len(v) for k, v in vsfc.items()})
             raw = collect_wiki(args)
-            vsfc = load_vsfc(args.vsfc_dir)
             n_jobs = args.n_jobs
         print(f"[wiki] {len(raw):,} câu thô sau lọc")
         write_lines(config.DATA_DIR / "wiki_sentences.txt", raw)
