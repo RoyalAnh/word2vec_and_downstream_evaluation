@@ -1,0 +1,35 @@
+# Python environments and generated files
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+
+# Experiment data, models, and results
+/work/
+/data/
+/models/
+/results/
+/notebooks/output/
+*.kv
+*.pt
+*.pth
+
+# Notebook and tool caches
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local configuration and logs
+.env
+.env.*
+!.env.example
+*.log
+*.zip
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+report

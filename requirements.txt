@@ -1,0 +1,13 @@
+numpy
+scipy
+pandas
+scikit-learn
+matplotlib
+gensim>=4.3
+pyvi
+datasets
+transformers
+torch
+tqdm
+# tuỳ chọn: tách từ bằng underthesea thay cho pyvi (--tokenizer underthesea)
+# underthesea
