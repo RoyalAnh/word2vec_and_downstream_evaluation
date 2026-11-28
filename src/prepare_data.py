@@ -26,6 +26,21 @@ def split_sentences(text):
     return [p.strip() for p in re.split(r"(?<=[.!?…])\s+|\n+", text) if p.strip()]
 
 
+def select_articles(stream, n_articles, min_chars, max_scan):
+    """Lấy đủ `n_articles` bài có độ dài >= min_chars (bỏ các bài sơ khai 1-2 câu), duyệt tối đa max_scan bài."""
+    out, scanned = [], 0
+    for text in stream:
+        scanned += 1
+        if len(text) >= min_chars:
+            out.append(text)
+            if len(out) >= n_articles:
+                break
+        if scanned >= max_scan:
+            break
+    print(f"[wiki] duyệt {scanned:,} bài, giữ {len(out):,} bài dài >= {min_chars} ký tự")
+    return out
+
+
 def collect_wiki(args):
     paragraphs = []
     if args.wiki_txt:
@@ -38,10 +53,8 @@ def collect_wiki(args):
         from datasets import load_dataset
         ds = load_dataset("wikimedia/wikipedia", "20231101.vi", split="train", streaming=True)
         ds = ds.shuffle(seed=args.seed, buffer_size=10_000)
-        for i, ex in enumerate(ds):
-            if i >= args.n_articles:
-                break
-            paragraphs.append(ex["text"])
+        paragraphs = select_articles((ex["text"] for ex in ds), args.n_articles,
+                                     args.min_article_chars, args.max_scan)
     sents = []
     for para in paragraphs:
         for s in split_sentences(normalize_text_keep_lines(para)):
@@ -125,6 +138,23 @@ def load_vsfc(vsfc_dir):
             "hoặc train.csv/dev.csv/test.csv với cột sentence,sentiment,topic). Lỗi gốc: " + repr(e))
 
 
+def print_diagnostics(tok_lines, cnt, vocab5):
+    """In ra vài thông tin để người chạy nhìn là biết ngữ liệu có ổn không."""
+    import random
+    from eval_intrinsic import SAMPLE_WORDS
+    rng = random.Random(0)
+    print("\n[KIỂM TRA NGỮ LIỆU]")
+    print("  30 từ phổ biến nhất:", ", ".join(w for w, _ in cnt.most_common(30)))
+    for l in rng.sample(tok_lines, min(5, len(tok_lines))):
+        print("  câu mẫu:", " ".join(l[:25]))
+    found = [w for w in SAMPLE_WORDS if w in vocab5]
+    print(f"  từ mẫu có trong từ vựng (min_count={config.MIN_COUNT}): {len(found)}/{len(SAMPLE_WORDS)} (cần >= 15)")
+    n_tok = sum(cnt.values())
+    if n_tok < 3_000_000 or len(vocab5) < 10_000:
+        print(f"  [CẢNH BÁO] ngữ liệu còn nhỏ: {n_tok:,} token, từ vựng(min_count) {len(vocab5):,} "
+              "(mong đợi vài triệu token, >10.000 từ). Tăng --n_articles hoặc giảm --min_article_chars.")
+
+
 def zipf_stats(counter, path_png, title):
     freqs = np.array(sorted(counter.values(), reverse=True), dtype=float)
     ranks = np.arange(1, len(freqs) + 1)
@@ -148,8 +178,10 @@ def zipf_stats(counter, path_png, title):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--n_articles", type=int, default=30000)
-    ap.add_argument("--max_sentences", type=int, default=1_500_000)
+    ap.add_argument("--n_articles", type=int, default=20000, help="số bài DÀI cần lấy")
+    ap.add_argument("--min_article_chars", type=int, default=1500, help="bỏ bài ngắn hơn (bài sơ khai)")
+    ap.add_argument("--max_scan", type=int, default=400_000, help="duyệt tối đa bấy nhiêu bài")
+    ap.add_argument("--max_sentences", type=int, default=1_000_000, help="trần số câu (khống chế thời gian tách từ)")
     ap.add_argument("--wiki_txt", default=None, help="file/thư mục .txt cục bộ thay cho Wikipedia HF")
     ap.add_argument("--vsfc_dir", default=None)
     ap.add_argument("--tokenizer", default="pyvi", choices=["pyvi", "underthesea"])
@@ -228,6 +260,7 @@ def main():
     (config.TABLE_DIR / "data_stats.md").write_text(md_table(["phần", "thống kê"], rows), encoding="utf-8")
     log_run("prepare_data", "corpus", args.seed, vars(args), stats, t.dt)
     print(json.dumps(stats, ensure_ascii=False, indent=2))
+    print_diagnostics(tok_lines, cnt, vocab5)
 
 
 if __name__ == "__main__":
